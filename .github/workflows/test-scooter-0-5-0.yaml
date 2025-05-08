@@ -1,0 +1,58 @@
+name: Test WinGet Installation
+on:
+  pull_request:
+
+jobs:
+  test_installation:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test Installation
+        shell: pwsh
+        run: |
+          # 1. Read the installer manifest
+          $installerManifestPath = "manifests/t/thomasschafer/scooter/0.5.0/thomasschafer.scooter.installer.yaml"
+          Install-Module -Name powershell-yaml -Force -Scope CurrentUser
+          $yamlContent = Get-Content -Path $installerManifestPath -Raw
+          $installerYaml = ConvertFrom-Yaml -Yaml $yamlContent
+
+          # 2. Get key information from manifest
+          $installerUrl = $installerYaml.Installers[0].InstallerUrl
+          $installerHash = $installerYaml.Installers[0].InstallerSha256
+          $relativePath = $installerYaml.NestedInstallerFiles[0].RelativeFilePath
+          Write-Host "Downloading from: $installerUrl"
+          Write-Host "Expected executable: $relativePath"
+
+          # 3. Download and extract installer
+          $tempDir = Join-Path -Path $env:TEMP -ChildPath "scooter-test"
+          New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+          $zipPath = Join-Path -Path $tempDir -ChildPath "scooter.zip"
+          Invoke-WebRequest -Uri $installerUrl -OutFile $zipPath
+
+          # 4. Verify hash
+          $downloadedHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+          if ($downloadedHash -ne $installerHash) {
+              Write-Error "Hash mismatch: Expected $installerHash but got $downloadedHash"
+              exit 1
+          }
+
+          # 5. Extract and verify contents
+          Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+          Write-Host "Extracted content:"
+          Get-ChildItem -Path $tempDir -Recurse | ForEach-Object { Write-Host " - $($_.Name)" }
+
+          # 6. Test the executable
+          $exePath = Join-Path -Path $tempDir -ChildPath $relativePath
+          if (-not (Test-Path $exePath)) {
+              Write-Error "Executable not found at expected path: $relativePath"
+              exit 1
+          }
+
+          # 7. Run the executable to verify it works
+          Write-Host "Testing executable: $exePath"
+          & $exePath --version
+          & $exePath --help
+
+          Write-Host "Installation test passed!"
